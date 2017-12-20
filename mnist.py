@@ -15,151 +15,12 @@ from math import sqrt
 
 import tensorflow as tf
 
-def KLregularizer(expected, coeff):
-    """Kullback-Leibler regularizer for sparse autoencoder"""
-
-    # tanh scaling to [0,1] interval
-    expected = (1 + expected) / 2
-    
-    def kl(x):
-        """
-        The Kullback-Leibler divergence for two Bernoulli distributions
-        with mean `expected` and `x` respectively
-        """
-
-        # tanh scaling to [0,1] interval
-        x = (1 + x) / 2
-        
-        return tf.cond(
-            # if x <= 0 or x == 1
-            tf.logical_or(tf.less_equal(expected / x, 0), tf.less_equal((1 - expected)/(1 - x), 0)),
-            # just return 0
-            lambda: 0.,
-            # else, compute KL divergence
-            lambda: expected * K.log(expected / x) + (1 - expected) * K.log((1 - expected)/(1 - x))
-        )
-
-    def reg(observed_activations):
-        """
-        Calculates the regularization that needs to be applied to improve sparsity
-        """
-        
-        # outputs of encoding layer will be shaped (batch_size, 32)
-        # print(observed_activations.get_shape().as_list())
-        observed = K.mean(observed_activations, axis = [0])
-        # print("shape means: {}".format(observed.get_shape().as_list()))
-        
-        allkl = K.map_fn(kl, observed)
-        sumkl = K.sum(allkl)
-
-        return coeff * sumkl
-
-    return reg
-
-# following https://wiseodd.github.io/techblog/2016/12/05/contractive-autoencoder/
-def contractive_loss(model, rec_err = losses.binary_crossentropy, tanh = True, lam = 2e-4):
-    # derive either tanh or sigmoid
-    der_act = (lambda h: 1 - h * h) if tanh else (lambda: h * (1 - h))
-    
-    def loss(y_pred, y_true):
-        rec = rec_err(y_pred, y_true)
-
-        W = K.variable(value=model.get_layer('encoded').get_weights()[0])  # N x N_hidden
-        W = K.transpose(W)  # N_hidden x N
-        h = model.get_layer('encoded').output
-        dh = der_act(h)  # N_batch x N_hidden
-        
-        # N_batch x N_hidden * N_hidden x 1 = N_batch x 1
-        contractive = lam * K.sum(dh**2 * K.sum(W**2, axis=1), axis=1)
-        
-        return rec + contractive
-
-    return loss
-
-def noise_input(x, proportion = 0.05):
-    x_noisy = x + np.around(np.random.uniform(low = 0., high = 0.5 / (1 - proportion), size = x.shape))
-    x_noisy = np.clip(x_noisy, 0., 1.)
-    
-    return x_noisy
-
-def correntropy_loss(sigma = 0.2):
-    def robust_kernel(alpha):
-        return 1. / (sqrt(2 * np.pi) * sigma) * K.exp(- K.square(alpha) / (2 * sigma * sigma))
-
-    def loss(y_pred, y_true):
-        return -K.sum(robust_kernel(y_pred - y_true))
-
-    return loss
-
-class LossHistory(callbacks.Callback):
-    def on_train_begin(self, logs={}):
-        self.losses = []
-
-    def on_epoch_end(self, batch, logs={}):
-        self.losses.append(logs.get('loss'))
-
-# following https://blog.keras.io/building-autoencoders-in-keras.html
-class Autoencoder():
-    def __init__(self, encoding_dim = 32, weight_decay = True, sparse = False, contractive = False, denoising = False, robust = False, activation = "tanh"):
-        self.weight_decay = weight_decay
-        self.sparse = sparse
-        self.contractive = contractive
-        self.denoising = denoising
-        self.robust = robust
-
-        self.encoding_dim = encoding_dim
-        self.activation = activation
-
-        attrs = []
-        if self.sparse: attrs.append("sparse")
-        if self.contractive: attrs.append("contractive")
-        if self.denoising: attrs.append("denoising")
-        if self.robust: attrs.append("robust")
-        if not attrs: attrs.append("basic")
-        if self.weight_decay: attrs.append("wd")
-
-        self.name = "{}-{}-{}".format(
-            "-".join(attrs),
-            encoding_dim,
-            activation
-        )
-
-        self.build()
-
-    def build(self):
-        # "encoded" is the encoded representation of the input
-        activity_reg = KLregularizer(-0.7, 0.2) if self.sparse else regularizers.l1(0.)
-        kernel_reg = regularizers.l2(0.02) if self.weight_decay else regularizers.l1(0.)
-        
-        # this is our input placeholder
-        input_img = Input(shape=(784,))
-        
-        encoded = Dense(self.encoding_dim, activation=self.activation
-                        , activity_regularizer = activity_reg
-                        , kernel_regularizer = kernel_reg
-                        , name = "encoded")(input_img)
-
-        # "decoded" is the lossy reconstruction of the input
-        decoded = Dense(784, activation=('linear' if self.activation == "linear" else 'sigmoid')
-                        , name = "decoded")(encoded)
-
-        # this model maps an input to its reconstruction
-        self.model = Model(input_img, decoded)
-
-        # this model maps an input to its encoded representation
-        self.encoder = Model(input_img, encoded)
-
-        # create a placeholder for an encoded (32-dimensional) input
-        encoded_input = Input(shape=(self.encoding_dim,))
-        # retrieve the last layer of the autoencoder model
-        decoder_layer = self.model.layers[-1]
-        # create the decoder model
-        self.decoder = Model(encoded_input, decoder_layer(encoded_input))
-        
+from utils import *
+from autoencoder import Autoencoder
 
 from keras.datasets import mnist
 
-class Trainer():
+class MNISTTrainer():
     def __init__(self, autoencoder = Autoencoder()):
         self.autoencoder = autoencoder
         (x_train, _), (x_test, self.y_test) = mnist.load_data()
@@ -215,15 +76,14 @@ class Trainer():
             "mse" if loss == losses.mean_squared_error else ("xent" if loss == losses.binary_crossentropy or self.autoencoder.contractive else "corr")
         )
 
-        with open("/home/fdavidcl/Documentos/research/publications/2017/ReviewAutoencoders/examples/{}-{}.csv".format(self.autoencoder.name, self.name), "w") as out_file:
+        with open("{}-{}.csv".format(self.autoencoder.name, self.name), "w") as out_file:
             out_file.write(",".join(("{}".format(x) for x in history.losses)))
 
         return self
 
     def predict_test(self):
-        
         # encode and decode some digits
-        # note that we take them from # TODO: he *test* set
+        # note that we take them from the *test* set
         encoded_imgs = self.autoencoder.encoder.predict(self.x_test)
         decoded_imgs = self.autoencoder.decoder.predict(encoded_imgs)
 
@@ -291,7 +151,7 @@ class Trainer():
                 ax.get_yaxis().set_visible(False)
 
                 
-        fig.savefig("/home/fdavidcl/Documentos/research/publications/2017/ReviewAutoencoders/examples/{}-{}.pdf".format(self.autoencoder.name, self.name), pad_inches = 0)
+        fig.savefig("{}-{}.pdf".format(self.autoencoder.name, self.name), pad_inches = 0)
 
         return self
 
@@ -342,26 +202,8 @@ rae = Autoencoder(
     robust = True
 )
 
-# for typ in [ae, wd, sae, cae, dae, rae]:
-#     Trainer(typ).train(epochs = 60, optimizer = "adam").predict_test()
+for typ in [ae, wd, sae, cae, dae, rae]:
+    MNISTTrainer(typ).train(
+        epochs = 60, optimizer = "rmsprop"
+    ).predict_test()
 
-# for opt in ["sgd", "adam", "adagrad", "rmsprop", "adadelta"]:
-#     Trainer(Autoencoder(
-#         encoding_dim = encoding_dim,
-#         weight_decay = False
-#     )).train(epochs = 60, optimizer = opt).predict_test()
-
-#for enc in [4, 16, 36, 81, 144]:
-Trainer(Autoencoder(
-    encoding_dim = 36,
-    weight_decay = False,
-    activation = "linear"
-)).train(epochs = 60, loss = losses.mean_squared_error).predict_test()
-
-# for act in ["relu", "sigmoid", "tanh", "selu"]:
-#     Trainer(Autoencoder(
-#         encoding_dim = encoding_dim,
-#         weight_decay = False,
-#         activation = act
-#     )).train(epochs = 60).predict_test()
-    
