@@ -17,10 +17,7 @@ import tensorflow as tf
 
 from utils import *
 import metrics
-from autoencoder import Autoencoder
-
-
-from keras.datasets import mnist
+from traditional_mlp import MultilabelClassifier
 
 def hamming_loss(y_true, y_pred):
     return K.mean(K.abs(y_true - y_pred))
@@ -55,7 +52,7 @@ class MultilabelAutoencoder():
         classification = Lambda(lambda x: K.round(x)
                                 , name = "classification")(encoding)
         decodification = Dense(input_length
-#                               , activation = 'sigmoid'
+                               , activation = 'sigmoid'
                                , name = "decodification")(encoding)
 
         self.model = Model(input_attributes,
@@ -84,57 +81,8 @@ class MultilabelAutoencoder():
                        shuffle = True,
                        callbacks = [history])
 
-from scipy.io import arff
-from xml.etree import ElementTree
-# TODO: implement labels at front
-def load_arff(filename, labelcount, labels_at_end = True):
-    with open(filename) as arff_file:
-        data, meta = arff.loadarff(arff_file)
-#    label_data = ElementTree.parse(xmlfile).getroot()
-#    label_names = [label.get("name") for label in label_data.getchildren()]
-    data = data.tolist()
-    y_len = labelcount
-    x_len = len(data[0]) - y_len
-    x = np.asarray([list(i[0:x_len]) for i in data])
-    classes = { b'1': 1, b'0': 0 }
-    y = np.asarray([[classes[y] for y in i[x_len:(x_len + y_len)]] for i in data])
-    return x, y
 
-from weka.arff import ArffFile, Nominal, String, Numeric
-def load_sparse_arff(filename, labelcount, labels_at_end = True):
-    fil = ArffFile.load(filename)
-    attr_names = fil.attributes
-    input_len = len(attr_names) - labelcount
-    attr_to_index = {}
-
-    for idx, n in enumerate(attr_names):
-        attr_to_index[n] = idx
-
-    x = np.zeros((len(fil.data), input_len), dtype = np.float32)
-    y = np.zeros((len(fil.data), labelcount), dtype = np.int8)
-
-    nom_to_num = {'0': 0, '1': 1}
-
-    for row, instance in enumerate(fil.data):
-        for attr, val in instance.items():
-            idx = attr_to_index[attr]
-
-            if labels_at_end:
-                if idx > input_len:
-                    idx = idx - input_len
-                    y[row, idx] = nom_to_num[val.value]                
-                else:
-                    x[row, idx] = val.value if type(val) == Numeric else nom_to_num[val.value]
-            else:
-                if idx <= labelcount:
-                    y[row, idx] = nom_to_num[val.value]
-                else:
-                    idx = idx - labelcount
-                    x[row, idx] = val.value if type(val) == Numeric else nom_to_num[val.value]
-                    
-    return x, y
-
-import arff
+import arff # needs liac-arff
 def load_liac_arff(filename, labelcount, labels_at_end = True):
     ardata = arff.load(open(filename, "r"))
     input_len = len(ardata["attributes"]) - labelcount
@@ -168,48 +116,56 @@ from sklearn.preprocessing import normalize
 
 datasets = {
     "bibtex": (22, True),
-    "medical": (45, True),
-    "emotions": (6, True),
     "CAL500": (174, True),
-    "corel5k": (374, True)
+    "corel5k": (374, True),
+    "emotions": (6, True),
+    "enron": (53, True),
+    "mediamill": (101, True),
+    "medical": (45, True),
+    "scene": (6, True),
+    "SLASHDOT-F": (22, False),
+    "tmc2007": (22, True) # tmc2007_500 in Cometa
 }
+numerical = ["CAL500", "emotions", "mediamill", "scene"]
 
-chosen = "corel5k"
+chosen = ["bibtex", "corel5k", "enron", "medical", "SLASHDOT-F", "tmc2007"]
+weights = [0.5, 1, 2, 10]
 
-#load_f = load_sparse_arff if SPARSE else load_arff
+for dataset in chosen:
+    train_x, train_y = load_liac_arff("partitions/" + dataset + "-5x2x1-1tra.arff", datasets[dataset][0], labels_at_end = datasets[dataset][1])
+    test_x, test_y = load_liac_arff("partitions/" + dataset + "-5x2x1-1tst.arff", datasets[dataset][0], labels_at_end = datasets[dataset][1])
+
+    # train_x = normalize(train_x, axis = 0)
+    # test_x = normalize(test_x, axis = 0)
+
+    for w in weights:
+        for net in [MultilabelAutoencoder, MultilabelClassifier]:
+            configuration = "_xent"
+            if net == MultilabelClassifier:
+                configuration = "_mlp" + configuration
+                
+            mlae = net(
+                train_x.shape[1], train_y.shape[1],
+                eval_encoding = True
+            )
+            epochs = 400000 // train_x.shape[0]
+            mlae.train(
+                train_x, train_y,
+                weights = [1, w],
+                epochs = epochs,
+                classification_loss = losses.binary_crossentropy,
+                # reconstruction_loss = losses.mean_squared_error
+                reconstruction_loss = losses.binary_crossentropy
+            )
     
-train_x, train_y = load_liac_arff("partitions/" + chosen + "-5x2x1-1tra.arff", datasets[chosen][0], labels_at_end = datasets[chosen][1])
-test_x, test_y = load_liac_arff("partitions/" + chosen + "-5x2x1-1tst.arff", datasets[chosen][0], labels_at_end = datasets[chosen][1])
+            print("TRAIN {} ============".format(w))
+            pred_y = mlae.classifier.predict(train_x)
+            # print(pred_y.shape)
+            metrics.report(train_y, pred_y)
+            
+            print("TEST {} =============".format(w))
+            pred_y = mlae.classifier.predict(test_x)
+            # print(pred_y.shape)
+            metrics.report(test_y, pred_y)
 
-#print(train_x[0:10])
-
-#exit(0)
-#med_x = normalize(med_x, axis = 0)
-#test_x = normalize(test_x, axis = 0)
-
-for w in [10]:
-    mlae = MultilabelAutoencoder(
-        train_x.shape[1], train_y.shape[1],
-        eval_encoding = True
-    )
-    mlae.train(
-        train_x, train_y,
-        weights = [1, w],
-        epochs = 400000 // train_x.shape[0],
-        classification_loss = losses.binary_crossentropy,
-#        reconstruction_loss = losses.mean_squared_error
-        reconstruction_loss = losses.binary_crossentropy
-    )
-    
-    pred_y = mlae.classifier.predict(train_x)
-    #pred_y = np.int64(pred_y)
-    print("TRAIN {} ============".format(w))
-    # print(pred_y.shape)
-    #print(losses.binary_crossentropy(med_y, pred_y))
-    metrics.report(train_y, pred_y)
-
-    pred_y = mlae.classifier.predict(test_x)
-    #pred_y = np.int64(pred_y)
-    print("TEST {} =============".format(w))
-    # print(pred_y.shape)
-    metrics.report(test_y, pred_y)
+            metrics.csv_report("experiment.csv", dataset + configuration + "_w{}_e{}".format(w, epochs), test_y, pred_y)
