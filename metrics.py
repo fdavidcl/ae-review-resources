@@ -18,16 +18,16 @@ def false_negative(y_true, y_pred):
     return false_positive(1 - y_true, 1 - y_pred)
 
 def accuracy(tp, fp, tn, fn): return (tp + tn) / (tp + fp + tn + fn)
-def precision(tp, fp, tn, fn): return tp / (tp + fp) if tp + fp > 0 else 1
-def recall(tp, fp, tn, fn): return tp / (tp + fn) if tp + fn > 0 else 1
+def precision(tp, fp, tn, fn): return tp / (tp + fp)# if tp + fp > 0 else 1
+def recall(tp, fp, tn, fn): return tp / (tp + fn)# if tp + fn > 0 else 1
 
 def micro(metric):
     def f(y_true, y_pred):
-        tp = np.mean(true_positive(y_true, y_pred))
-        fp = np.mean(false_positive(y_true, y_pred))
-        tn = np.mean(true_negative(y_true, y_pred))
-        fn = np.mean(false_negative(y_true, y_pred))
-
+        tp = np.sum(true_positive(y_true, y_pred))
+        fp = np.sum(false_positive(y_true, y_pred))
+        tn = np.sum(true_negative(y_true, y_pred))
+        fn = np.sum(false_negative(y_true, y_pred))
+        # print(np.array([[tp, fp],[fn, tn]]))
         return metric(tp, fp, tn, fn)
 
     return f
@@ -41,7 +41,10 @@ def macro(metric):
 
         matrix = np.vstack((tp, fp, tn, fn))
         unpacked = lambda a: metric(*a)
-        return np.mean(np.apply_along_axis(unpacked, 0, matrix))
+        applied = np.apply_along_axis(unpacked, 0, matrix)
+        # print(applied)
+        # ignore nans for mean:
+        return np.nanmean(applied)
 
     return f
 
@@ -86,15 +89,17 @@ def hamming_loss(y_true, y_pred):
 def subset_accuracy(y_true, y_pred):
     return np.mean(np.all(y_true == y_pred, axis = 1))
 
+confusion_matrix = micro(lambda tp, fp, tn, fn: np.array([[tp, fp], [fn, tn]]))
+
 def report(y_true, y_pred):
     metrics = {
+        "confusion matrix": confusion_matrix,
+        "accuracy": micro(accuracy),
         "microP": micro(precision),
         "microR": micro(recall),
-        "microA": micro(accuracy),
         "microF": lambda t, p: fmeasure(metrics["microP"](t, p), metrics["microR"](t, p)),
         "macroP": macro(precision),
         "macroR": macro(recall),
-        "macroA": macro(accuracy),
         "macroF": lambda t, p: fmeasure(metrics["macroP"](t, p), metrics["macroR"](t, p)),
         "hamming": hamming_loss,
         "subsetA": subset_accuracy

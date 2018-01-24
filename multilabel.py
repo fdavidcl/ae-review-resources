@@ -25,14 +25,28 @@ from keras.datasets import mnist
 def hamming_loss(y_true, y_pred):
     return K.mean(K.abs(y_true - y_pred))
 
+def microprecision(y_true, y_pred):
+    tp = K.sum(y_true * y_pred)
+    fp = K.sum(K.clip(y_pred - y_true, 0, 1))
+    return -tp / (tp + fp)
+
+def microrecall(y_true, y_pred):
+    tp = K.sum(y_true * y_pred)
+    fn = K.sum(K.clip(y_true - y_pred, 0, 1))
+    return -tp / (tp + fn)
+
+def microfm(y_true, y_pred):
+    prec = microprecision(y_true, y_pred)
+    recl = microrecall(y_true, y_pred)
+    return 2 * prec * recl / (prec + recl)
+
 class MultilabelAutoencoder():
-    ## I need a model graph with two outputs (the encoding layer as well as the actual output), two loss functions (possibly cross entropy) and a pair of loss weights.
     def __init__(self, input_length, encoding_length):
         self.build(input_length, encoding_length)
 
     def build(self, input_length, encoding_length):
         input_attributes = Input(shape = (input_length, ))
-        input_labels = Input(shape = (encoding_length, ))
+        #input_labels = Input(shape = (encoding_length, ))
         encoding = Dense(encoding_length
                          , activation = 'sigmoid'
 #                         , activity_regularizer = activity_reg
@@ -44,7 +58,7 @@ class MultilabelAutoencoder():
                                , activation = 'sigmoid'
                                , name = "decodification")(encoding)
 
-        self.model = Model([input_attributes, input_labels],
+        self.model = Model(input_attributes,
                            [decodification, classification])
 
         self.classifier = Model(input_attributes, classification)
@@ -54,15 +68,16 @@ class MultilabelAutoencoder():
 
     def train(self, x_train, y_train,
               optimizer = 'rmsprop',
-              loss = losses.binary_crossentropy,
-              clas_weight = 0.5,
+              reconstruction_loss = losses.binary_crossentropy,
+              classification_loss = losses.binary_crossentropy,
+              weights = [1, 1],
               epochs = 60):
         self.model.compile(optimizer = optimizer
-                           , loss = [loss, hamming_loss]
-                           , loss_weights = [1 - clas_weight, clas_weight])
+                           , loss = [reconstruction_loss, classification_loss]
+                           , loss_weights = weights)
 
         history = LossHistory()
-        self.model.fit([x_train, y_train],
+        self.model.fit(x_train,
                        [x_train, y_train],
                        epochs = epochs,
                        batch_size = 256,
@@ -87,23 +102,29 @@ def load_arff(filename, labelcount, labels_at_end = True):
 from sklearn.preprocessing import normalize
 
 # mediamill
-med_x, med_y = load_arff("mediamill-train.arff", 101)
-test_x, test_y = load_arff("mediamill-test.arff", 101)
+med_x, med_y = load_arff("partitions/scene-5x2x1-2tra.arff", 6)
+test_x, test_y = load_arff("partitions/scene-5x2x1-2tst.arff", 6)
 med_x = normalize(med_x, axis = 0)
 test_x = normalize(test_x, axis = 0)
-mlae = MultilabelAutoencoder(med_x.shape[1], med_y.shape[1])
-mlae.train(med_x, med_y, clas_weight = 0, epochs = 40)
 
-pred_y = mlae.classifier.predict(med_x)
-#pred_y = np.int64(pred_y)
-print("TRAIN ============")
-print(pred_y.shape)
-#print(losses.binary_crossentropy(med_y, pred_y))
-metrics.report(med_y, pred_y)
+for w in [2]:
+    mlae = MultilabelAutoencoder(med_x.shape[1], med_y.shape[1])
+    mlae.train(
+        med_x, med_y,
+        weights = [1, w],
+        epochs = 200,
+        classification_loss = losses.binary_crossentropy
+    )
+    
+    pred_y = mlae.classifier.predict(med_x)
+    #pred_y = np.int64(pred_y)
+    print("TRAIN {} ============".format(w))
+    # print(pred_y.shape)
+    #print(losses.binary_crossentropy(med_y, pred_y))
+    metrics.report(med_y, pred_y)
 
-pred_y = mlae.classifier.predict(test_x)
-#pred_y = np.int64(pred_y)
-print("TEST =============")
-print(pred_y.shape)
-#print(losses.binary_crossentropy(test_y, pred_y))
-metrics.report(test_y, pred_y)
+    pred_y = mlae.classifier.predict(test_x)
+    #pred_y = np.int64(pred_y)
+    print("TEST {} =============".format(w))
+    # print(pred_y.shape)
+    metrics.report(test_y, pred_y)
