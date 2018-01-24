@@ -55,7 +55,7 @@ class MultilabelAutoencoder():
         classification = Lambda(lambda x: K.round(x)
                                 , name = "classification")(encoding)
         decodification = Dense(input_length
-                               , activation = 'sigmoid'
+#                               , activation = 'sigmoid'
                                , name = "decodification")(encoding)
 
         self.model = Model(input_attributes,
@@ -101,7 +101,6 @@ def load_arff(filename, labelcount, labels_at_end = True):
     return x, y
 
 from weka.arff import ArffFile, Nominal, String, Numeric
-# TODO: implement labels at front
 def load_sparse_arff(filename, labelcount, labels_at_end = True):
     fil = ArffFile.load(filename)
     attr_names = fil.attributes
@@ -116,48 +115,98 @@ def load_sparse_arff(filename, labelcount, labels_at_end = True):
 
     nom_to_num = {'0': 0, '1': 1}
 
-    for instance in fil.data:
+    for row, instance in enumerate(fil.data):
         for attr, val in instance.items():
             idx = attr_to_index[attr]
-        
-            if idx > input_len:
-                idx = idx - input_len
-                y[idx] = nom_to_num[val.value]                
+
+            if labels_at_end:
+                if idx > input_len:
+                    idx = idx - input_len
+                    y[row, idx] = nom_to_num[val.value]                
+                else:
+                    x[row, idx] = val.value if type(val) == Numeric else nom_to_num[val.value]
             else:
-                x[idx] = val.value if type(val) == Numeric else nom_to_num[val.value]
-                
+                if idx <= labelcount:
+                    y[row, idx] = nom_to_num[val.value]
+                else:
+                    idx = idx - labelcount
+                    x[row, idx] = val.value if type(val) == Numeric else nom_to_num[val.value]
+                    
+    return x, y
+
+import arff
+def load_liac_arff(filename, labelcount, labels_at_end = True):
+    ardata = arff.load(open(filename, "r"))
+    input_len = len(ardata["attributes"]) - labelcount
+    instances = len(ardata["data"])
+    
+    x = np.zeros((instances, input_len), dtype = np.float32)
+    y = np.zeros((instances, labelcount), dtype = np.int8)
+
+    nom_to_num = {'0': 0, '1': 1, 'YES': 0, 'NO': 1}
+
+    for row, instance in enumerate(ardata["data"]):
+        if labels_at_end:
+            for idx, val in enumerate(instance):
+                if idx < input_len:
+                    x[row, idx] = nom_to_num[val] if type(val) == str else val
+                else:
+                    idx = idx - input_len
+                    y[row, idx] = nom_to_num[val]
+        else:
+            for idx, val in enumerate(instance):
+                if idx >= labelcount:
+                    idx = idx - labelcount
+                    x[row, idx] = nom_to_num[val] if type(val) == str else val
+                else:
+                    y[row, idx] = nom_to_num[val]
+
     return x, y
 
 from sklearn.preprocessing import normalize
 
 
-FILE = "partitions/CAL500-5x2x1-1"
-SPARSE = False
-LABELS = 174
+datasets = {
+    "bibtex": (22, True),
+    "medical": (45, True),
+    "emotions": (6, True),
+    "CAL500": (174, True),
+    "corel5k": (374, True)
+}
 
-load_f = load_sparse_arff if SPARSE else load_arff
+chosen = "corel5k"
+
+#load_f = load_sparse_arff if SPARSE else load_arff
     
-med_x, med_y = load_f(FILE + "tra.arff", LABELS)
-test_x, test_y = load_f(FILE + "tst.arff", LABELS)
+train_x, train_y = load_liac_arff("partitions/" + chosen + "-5x2x1-1tra.arff", datasets[chosen][0], labels_at_end = datasets[chosen][1])
+test_x, test_y = load_liac_arff("partitions/" + chosen + "-5x2x1-1tst.arff", datasets[chosen][0], labels_at_end = datasets[chosen][1])
 
-med_x = normalize(med_x, axis = 0)
-test_x = normalize(test_x, axis = 0)
+#print(train_x[0:10])
 
-for w in [1]:
-    mlae = MultilabelAutoencoder(med_x.shape[1], med_y.shape[1], eval_encoding = False)
+#exit(0)
+#med_x = normalize(med_x, axis = 0)
+#test_x = normalize(test_x, axis = 0)
+
+for w in [10]:
+    mlae = MultilabelAutoencoder(
+        train_x.shape[1], train_y.shape[1],
+        eval_encoding = True
+    )
     mlae.train(
-        med_x, med_y,
+        train_x, train_y,
         weights = [1, w],
-        epochs = 1000,
-        classification_loss = losses.binary_crossentropy
+        epochs = 400000 // train_x.shape[0],
+        classification_loss = losses.binary_crossentropy,
+#        reconstruction_loss = losses.mean_squared_error
+        reconstruction_loss = losses.binary_crossentropy
     )
     
-    pred_y = mlae.classifier.predict(med_x)
+    pred_y = mlae.classifier.predict(train_x)
     #pred_y = np.int64(pred_y)
     print("TRAIN {} ============".format(w))
     # print(pred_y.shape)
     #print(losses.binary_crossentropy(med_y, pred_y))
-    metrics.report(med_y, pred_y)
+    metrics.report(train_y, pred_y)
 
     pred_y = mlae.classifier.predict(test_x)
     #pred_y = np.int64(pred_y)
