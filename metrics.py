@@ -91,9 +91,8 @@ def subset_accuracy(y_true, y_pred):
 
 confusion_matrix = micro(lambda tp, fp, tn, fn: np.array([[tp, fp], [fn, tn]]))
 
-def report(y_true, y_pred):
+def all_metrics():
     metrics = {
-        "confusion matrix": confusion_matrix,
         "accuracy": micro(accuracy),
         "microP": micro(precision),
         "microR": micro(recall),
@@ -104,8 +103,30 @@ def report(y_true, y_pred):
         "hamming": hamming_loss,
         "subsetA": subset_accuracy
     }
+    return metrics
 
-    for name, f in metrics.items():
+def report(y_true, y_pred):
+    print("Confusion matrix:\n{}".format(confusion_matrix(y_true, y_pred)))
+    
+    for name, f in all_metrics().items():
         #print("Calculating {}".format(name))
         print("{}: {}".format(name, f(y_true, y_pred)))
     
+def csv_report(filename, title, y_true, y_pred):
+    metrics = all_metrics()
+    
+    try:
+        f = open(filename)
+        f.close()
+    except IOError as e:
+        with open(filename, "w") as outfile:
+            for name in metrics.keys():
+                outfile.write("{}, ".format(name))
+
+            outfile.write("title\n")
+            
+    with open(filename, "a") as outfile:
+        for f in metrics.values():
+            outfile.write("{}, ".format(f(y_true, y_pred)))
+
+        outfile.write("{}\n".format(title))
