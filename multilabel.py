@@ -52,7 +52,7 @@ class MultilabelAutoencoder():
         classification = Lambda(lambda x: K.round(x)
                                 , name = "classification")(encoding)
         decodification = Dense(input_length
-                               , activation = 'sigmoid'
+#                               , activation = 'sigmoid'
                                , name = "decodification")(encoding)
 
         self.model = Model(input_attributes,
@@ -111,8 +111,8 @@ def load_liac_arff(filename, labelcount, labels_at_end = True):
 
     return x, y
 
-from sklearn.preprocessing import normalize
-
+# from sklearn.preprocessing import normalize
+from sklearn.preprocessing import MinMaxScaler
 
 datasets = {
     "bibtex": (22, True),
@@ -126,46 +126,68 @@ datasets = {
     "SLASHDOT-F": (22, False),
     "tmc2007": (22, True) # tmc2007_500 in Cometa
 }
+
+def experiment(model_c, dataset_name, train_path, test_path, clas_weight, scale = False, configuration = "", val_step = None):
+    train_x, train_y = load_liac_arff(train_path, datasets[dataset_name][0], labels_at_end = datasets[dataset_name][1])
+    test_x, test_y = load_liac_arff(test_path, datasets[dataset_name][0], labels_at_end = datasets[dataset_name][1])
+
+    if scale:
+        scaler = MinMaxScaler()
+        train_x = scaler.fit_transform(train_x)
+        test_x = scaler.transform(test_x)
+
+    mlae = model_c(
+        train_x.shape[1], train_y.shape[1],
+        eval_encoding = True
+    )
+    epochs = 600000 // train_x.shape[0]
+    mlae.train(
+        train_x, train_y,
+        weights = [1, clas_weight],
+        epochs = epochs,
+        classification_loss = losses.binary_crossentropy,
+        # reconstruction_loss = losses.mean_squared_error
+        reconstruction_loss = losses.binary_crossentropy
+    )
+    
+    print("TRAIN ============")
+    pred_y = mlae.classifier.predict(train_x)
+    # print(pred_y.shape)
+    metrics.report(train_y, pred_y)
+    
+    print("TEST =============")
+    pred_y = mlae.classifier.predict(test_x)
+    # print(pred_y.shape)
+    metrics.report(test_y, pred_y)
+    
+    metrics.csv_report("validated.csv", dataset + configuration + "_w{}_e{}".format(clas_weight, epochs), test_y, pred_y, val_step)
+
+
 numerical = ["CAL500", "emotions", "mediamill", "scene"]
 
 chosen = ["bibtex", "corel5k", "enron", "medical", "SLASHDOT-F", "tmc2007"]
-weights = [0.5, 1, 2, 10]
+weights = [1, 10, 20, 100]
+
+def validation(dataset, scale = False):
+    for val in [1, 2]:
+        for step in range(1, 6):
+            train_path = "partitions/{}-5x2x{}-{}tra.arff".format(dataset, val, step)
+            test_path = "partitions/{}-5x2x{}-{}tst.arff".format(dataset, val, step)
+
+            for net in [MultilabelAutoencoder, MultilabelClassifier]:
+                configuration = "_xent"
+                if net == MultilabelClassifier:
+                    configuration = "_mlp" + configuration
+                    my_weights = [1]
+                else:
+                    my_weights = weights
+            
+                for w in my_weights:
+                    experiment(net, dataset, train_path, test_path, w, scale = scale, configuration = configuration, val_step = (5 if val == 2 else 0) + step)
+
 
 for dataset in chosen:
-    train_x, train_y = load_liac_arff("partitions/" + dataset + "-5x2x1-1tra.arff", datasets[dataset][0], labels_at_end = datasets[dataset][1])
-    test_x, test_y = load_liac_arff("partitions/" + dataset + "-5x2x1-1tst.arff", datasets[dataset][0], labels_at_end = datasets[dataset][1])
+    validation(dataset)
 
-    # train_x = normalize(train_x, axis = 0)
-    # test_x = normalize(test_x, axis = 0)
-
-    for w in weights:
-        for net in [MultilabelAutoencoder, MultilabelClassifier]:
-            configuration = "_xent"
-            if net == MultilabelClassifier:
-                configuration = "_mlp" + configuration
-                
-            mlae = net(
-                train_x.shape[1], train_y.shape[1],
-                eval_encoding = True
-            )
-            epochs = 400000 // train_x.shape[0]
-            mlae.train(
-                train_x, train_y,
-                weights = [1, w],
-                epochs = epochs,
-                classification_loss = losses.binary_crossentropy,
-                # reconstruction_loss = losses.mean_squared_error
-                reconstruction_loss = losses.binary_crossentropy
-            )
-    
-            print("TRAIN {} ============".format(w))
-            pred_y = mlae.classifier.predict(train_x)
-            # print(pred_y.shape)
-            metrics.report(train_y, pred_y)
-            
-            print("TEST {} =============".format(w))
-            pred_y = mlae.classifier.predict(test_x)
-            # print(pred_y.shape)
-            metrics.report(test_y, pred_y)
-
-            metrics.csv_report("experiment.csv", dataset + configuration + "_w{}_e{}".format(w, epochs), test_y, pred_y)
+for dataset in numerical:
+    validation(dataset, True)
