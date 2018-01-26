@@ -9,7 +9,7 @@ def true_positive(y_true, y_pred):
     return count_by_labels(y_true * y_pred)
 
 def false_positive(y_true, y_pred):
-    return count_by_labels(np.clip(y_pred - y_true, 0, 1))
+    return count_by_labels(y_pred * (1 - y_true))
 
 def true_negative(y_true, y_pred):
     return true_positive(1 - y_true, 1 - y_pred)

@@ -52,12 +52,13 @@ class MultilabelAutoencoder():
         classification = Lambda(lambda x: K.round(x)
                                 , name = "classification")(encoding)
         decodification = Dense(input_length
-#                               , activation = 'sigmoid'
+                               , activation = 'sigmoid'
                                , name = "decodification")(encoding)
 
         self.model = Model(input_attributes,
                            [decodification, encoding if eval_encoding else classification])
 
+        self.encoder = Model(input_attributes, encoding)
         self.classifier = Model(input_attributes, classification)
         self.autoencoder = Model(input_attributes, decodification)
 
@@ -68,7 +69,8 @@ class MultilabelAutoencoder():
               reconstruction_loss = losses.binary_crossentropy,
               classification_loss = losses.binary_crossentropy,
               weights = [1, 1],
-              epochs = 60):
+              epochs = 60,
+              post_train = False):
         self.model.compile(optimizer = optimizer
                            , loss = [reconstruction_loss, classification_loss]
                            , loss_weights = weights)
@@ -80,6 +82,14 @@ class MultilabelAutoencoder():
                        batch_size = 256,
                        shuffle = True,
                        callbacks = [history])
+
+        # Post-training worsens good results
+        if post_train:
+            self.encoder.compile(optimizer = optimizer,
+                                 loss = classification_loss)
+            self.encoder.fit(x_train, y_train, epochs = epochs,
+                             batch_size = 256, shuffle = True)
+
 
 
 import arff # needs liac-arff
@@ -127,7 +137,7 @@ datasets = {
     "tmc2007": (22, True) # tmc2007_500 in Cometa
 }
 
-def experiment(model_c, dataset_name, train_path, test_path, clas_weight, scale = False, configuration = "", val_step = None):
+def experiment(model_c, dataset_name, train_path, test_path, clas_weight, scale = False, loss_mse = False, configuration = "", val_step = None):
     train_x, train_y = load_liac_arff(train_path, datasets[dataset_name][0], labels_at_end = datasets[dataset_name][1])
     test_x, test_y = load_liac_arff(test_path, datasets[dataset_name][0], labels_at_end = datasets[dataset_name][1])
 
@@ -146,8 +156,7 @@ def experiment(model_c, dataset_name, train_path, test_path, clas_weight, scale 
         weights = [1, clas_weight],
         epochs = epochs,
         classification_loss = losses.binary_crossentropy,
-        # reconstruction_loss = losses.mean_squared_error
-        reconstruction_loss = losses.binary_crossentropy
+        reconstruction_loss = losses.mean_squared_error if loss_mse else losses.binary_crossentropy
     )
     
     print("TRAIN ============")
@@ -160,34 +169,37 @@ def experiment(model_c, dataset_name, train_path, test_path, clas_weight, scale 
     # print(pred_y.shape)
     metrics.report(test_y, pred_y)
     
-    metrics.csv_report("validated.csv", dataset + configuration + "_w{}_e{}".format(clas_weight, epochs), test_y, pred_y, val_step)
+    metrics.csv_report("posttrained.csv", dataset_name + configuration + "_w{}_e{}".format(clas_weight, epochs), test_y, pred_y, val_step)
 
 
 numerical = ["CAL500", "emotions", "mediamill", "scene"]
+binary = ["bibtex", "corel5k", "enron", "medical", "SLASHDOT-F", "tmc2007"]
 
-chosen = ["bibtex", "corel5k", "enron", "medical", "SLASHDOT-F", "tmc2007"]
-weights = [1, 10, 20, 100]
+numerical_weights = [1, 10, 100]
+binary_weights = [0.1, 0.5, 1, 2, 10]
 
-def validation(dataset, scale = False):
+def validation(dataset, scale = False, loss_mse = False):
     for val in [1, 2]:
         for step in range(1, 6):
             train_path = "partitions/{}-5x2x{}-{}tra.arff".format(dataset, val, step)
             test_path = "partitions/{}-5x2x{}-{}tst.arff".format(dataset, val, step)
 
             for net in [MultilabelAutoencoder, MultilabelClassifier]:
-                configuration = "_xent"
+                configuration = "_mse" if loss_mse else "_xent"
                 if net == MultilabelClassifier:
-                    configuration = "_mlp" + configuration
+                    configuration = configuration + "_mlp"
                     my_weights = [1]
                 else:
-                    my_weights = weights
+                    my_weights = numerical_weights if loss_mse else binary_weights
             
                 for w in my_weights:
-                    experiment(net, dataset, train_path, test_path, w, scale = scale, configuration = configuration, val_step = (5 if val == 2 else 0) + step)
+                    experiment(net, dataset, train_path, test_path, w, scale = scale, loss_mse = loss_mse, configuration = configuration, val_step = (5 if val == 2 else 0) + step)
 
 
-for dataset in chosen:
-    validation(dataset)
+#for dataset in binary:
+#    validation(dataset, False, False)
 
-for dataset in numerical:
-    validation(dataset, True)
+validation("SLASHDOT-F", False, False)
+
+#for dataset in numerical:
+#    validation(dataset, False, True)
